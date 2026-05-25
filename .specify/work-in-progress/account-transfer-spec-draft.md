@@ -13,7 +13,8 @@
   - A-1.1 구조 결정: ✅ **드라이빙(Transfer) + 드리븐(ImmediateTransferDetail·ScheduledTransferDetail) + 다건메타(BatchTransferRequest)**
   - A-1.2 다건자식 표현: ✅ A-1.1 답변에 포함됨 — ImmediateTransferDetail에 그대로 + BatchTransferRequest로 묶음
   - A-1.3 멱등성 단위: ✅ **하이브리드 — 2-Phase transferId(INITIATED→EXECUTED) + 출금계좌 락 + 요청 핑거프린트 관찰(논블로킹 경고)**. 의도된 연속 이체는 차단하지 않음.
-  - A-1.4 속성 세트 검토: 🔵 진행 중
+  - A-1.4 속성 세트 검토: ✅ 1차 확정 (29개 속성, PK 명시, 카멜케이스 표기, 시스템 컬럼 6종 포함). 추가 수정 의견 발생 시 갱신
+- 다음: **A-2 ImmediateTransferDetail 검토 시작**
 - `before_specify` hook (`speckit.git.feature`): **미실행**
 - `specs/<NNN>-account-transfer/spec.md`: **미작성**
 
@@ -49,7 +50,7 @@ A-1.4 Transfer 검토 중 사용자가 확정한 컨벤션. 본 spec 작업의 *
 - **도메인-영속화 계층 분리**: 옵션 3(부분 분리, CQRS 영향) + 톰 홈버그 매핑 전략 혼합 — 코어 ③ One-Way / 단순조회 ① No Mapping / 명령·복잡조회 ④ Full Mapping
 - **강제 분리**: Repository 인터페이스 분리(A) + Read-only Projection(B) + `@Transactional(readOnly = true)`(C) + 엔터티 캡슐화(D) **모두 적용**
 
-> ⏳ A-1.4 속성 표 카멜케이스 환원이 다음 단계 (현재 표는 SCREAMING_SNAKE_CASE 상태 — 곧 교체 예정)
+> ✅ Transfer 속성 표 카멜케이스 환원 완료 (2026-05-25).
 
 ---
 
@@ -102,41 +103,43 @@ A-1.4 Transfer 검토 중 사용자가 확정한 컨벤션. 본 spec 작업의 *
 
 ### A. 핵심 거래 (필수) — A-1 검토 결과 반영
 
-#### A-1. Transfer (드라이빙 테이블) — 1차 확정안 (추가 수정 대기 중)
+#### A-1. Transfer (드라이빙 테이블) — 1차 확정안
 
-**PK**: `(REQUESTER_USER_ID, TRANSFER_DATE, TRANSFER_ID)`
+> 표기 규칙: Spec 문서·도메인 코드는 **카멜케이스**, DB 컬럼은 **소문자 스네이크**로 자동 변환 (ADR-0012). 예: `transferId` ↔ `transfer_id`.
 
-| # | 컬럼 | 의미 | 비고 |
+**PK** (도메인 표기): `(requesterUserId, transferDate, transferId)` → DB: `(requester_user_id, transfer_date, transfer_id)`
+
+| # | 속성 (도메인) | 의미 | 비고 |
 |---|---|---|---|
-| 1 | `REQUESTER_USER_ID` | 요청자 (개인 고객 ID) | **PK1** — 사용자별 조회 path / 샤딩 |
-| 2 | `TRANSFER_DATE` | 거래 발생 일자 (KST 기준, `REQUESTED_AT`의 날짜 부분) | **PK2** — 일자별 파티션 |
-| 3 | `TRANSFER_ID` | 서버 생성 GUID, 외부 식별자·1-Phase 멱등키 겸용 | **PK3** |
-| 4 | `TRANSFER_KIND` | `IMMEDIATE_INTRABANK` / `IMMEDIATE_INTERBANK` / `SCHEDULED` / `BATCH_CHILD` | 드리븐 라우팅 |
-| 5 | `FROM_BANK_CODE` | 출금 은행 코드 (자행) | |
-| 6 | `FROM_ACCOUNT_NUMBER` | 출금 계좌번호 | |
-| 7 | `TO_BANK_CODE` | 수취 은행 코드 | |
-| 8 | `TO_ACCOUNT_NUMBER` | 수취 계좌번호 | |
-| 9 | `TO_PAYEE_NAME_INPUT` | 사용자가 입력한 수취 예금주명 (검증은 PayeeVerificationSnapshot) | |
-| 10 | `TRANSFER_AMOUNT` | 이체 금액 | |
-| 11 | `TRANSFER_CURRENCY` | 통화 (v1 KRW, ISO 4217) | |
-| 12 | `TRANSFER_MEMO` | 사용자 입력 적요 | |
-| 13 | `TRANSFER_STATUS` | 전체 상태 (TransferStateHistory 최신과 동기화) | |
-| 14 | `FAILURE_REASON_CODE` | 실패 사유 코드 | 성공 시 NULL |
-| 15 | `FAILURE_REASON_MESSAGE` | 실패 사유 메시지 | 성공 시 NULL |
-| 16 | `PARENT_BATCH_REQUEST_ID` | `BATCH_CHILD`일 때 BatchTransferRequest 참조 | nullable |
-| 17 | `AUTHENTICATION_REF_ID` | 인증·전자서명 토큰 참조 (외부 인증시스템) | |
-| 18 | `PAYEE_VERIFICATION_SNAPSHOT_ID` | PayeeVerificationSnapshot 참조 | |
-| 19 | `IDEMPOTENCY_PHASE` | `INITIATED` / `EXECUTED` (2-Phase 추적) | A-1.3 반영 |
-| 20 | `INITIATED_AT` | 1-Phase 시각 (TRANSFER_ID 발급) | |
-| 21 | `REQUESTED_AT` | 2-Phase 시각 (이체 실행 요청) | |
-| 22 | `COMPLETED_AT` | 종료 시각 (성공/실패/취소) | nullable |
-| 23 | `USER_CONTEXT_SNAPSHOT_ID` | UserContextSnapshot 참조 (G-19) | |
-| 24 | `CREATED_AT` | 시스템: 최초 INSERT 시각 | |
-| 25 | `CREATED_BY_ID` | 시스템: 최초 INSERT actor ID | |
-| 26 | `CREATED_BY_GUID` | 시스템: 최초 INSERT 호출 추적 GUID | |
-| 27 | `UPDATED_AT` | 시스템: 최종 UPDATE 시각 | |
-| 28 | `UPDATED_BY_ID` | 시스템: 최종 UPDATE actor ID | |
-| 29 | `UPDATED_BY_GUID` | 시스템: 최종 UPDATE 호출 추적 GUID | |
+| 1 | `requesterUserId` | 요청자 (개인 고객 ID) | **PK1** — 사용자별 조회 path / 샤딩 |
+| 2 | `transferDate` | 거래 발생 일자 (KST 기준, `requestedAt`의 날짜 부분) | **PK2** — 일자별 파티션 |
+| 3 | `transferId` | 서버 생성 GUID, 외부 식별자·1-Phase 멱등키 겸용 | **PK3** |
+| 4 | `transferKind` | `IMMEDIATE_INTRABANK` / `IMMEDIATE_INTERBANK` / `SCHEDULED` / `BATCH_CHILD` | 드리븐 라우팅 |
+| 5 | `fromBankCode` | 출금 은행 코드 (자행) | |
+| 6 | `fromAccountNumber` | 출금 계좌번호 | |
+| 7 | `toBankCode` | 수취 은행 코드 | |
+| 8 | `toAccountNumber` | 수취 계좌번호 | |
+| 9 | `toPayeeNameInput` | 사용자가 입력한 수취 예금주명 (검증은 PayeeVerificationSnapshot) | |
+| 10 | `transferAmount` | 이체 금액 | |
+| 11 | `transferCurrency` | 통화 (v1 KRW, ISO 4217) | |
+| 12 | `transferMemo` | 사용자 입력 적요 | |
+| 13 | `transferStatus` | 전체 상태 (TransferStateHistory 최신과 동기화) | |
+| 14 | `failureReasonCode` | 실패 사유 코드 | 성공 시 NULL |
+| 15 | `failureReasonMessage` | 실패 사유 메시지 | 성공 시 NULL |
+| 16 | `parentBatchRequestId` | `BATCH_CHILD`일 때 BatchTransferRequest 참조 | nullable |
+| 17 | `authenticationRefId` | 인증·전자서명 토큰 참조 (외부 인증시스템) | |
+| 18 | `payeeVerificationSnapshotId` | PayeeVerificationSnapshot 참조 | |
+| 19 | `idempotencyPhase` | `INITIATED` / `EXECUTED` (2-Phase 추적) | A-1.3 반영 |
+| 20 | `initiatedAt` | 1-Phase 시각 (transferId 발급) | |
+| 21 | `requestedAt` | 2-Phase 시각 (이체 실행 요청) | |
+| 22 | `completedAt` | 종료 시각 (성공/실패/취소) | nullable |
+| 23 | `userContextSnapshotId` | UserContextSnapshot 참조 (G-19) | |
+| 24 | `createdAt` | 시스템: 최초 INSERT 시각 | |
+| 25 | `createdById` | 시스템: 최초 INSERT actor ID | |
+| 26 | `createdByGuid` | 시스템: 최초 INSERT 호출 추적 GUID | |
+| 27 | `updatedAt` | 시스템: 최종 UPDATE 시각 | |
+| 28 | `updatedById` | 시스템: 최종 UPDATE actor ID | |
+| 29 | `updatedByGuid` | 시스템: 최종 UPDATE 호출 추적 GUID | |
 
 #### A 카테고리 잔여 엔터티 (A-2 이하, 동일 컨벤션으로 후속 검토)
 - **A-2. ImmediateTransferDetail (드리븐)** — 당행/타행 즉시이체 공통 특수정보 (신규, A-1.1에서 도출)
