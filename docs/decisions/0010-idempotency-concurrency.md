@@ -1,9 +1,11 @@
 # ADR-0010: 멱등성·동시성 — 2-Phase + 다층 락 + 핑거프린트
 
-- Status: Accepted
+- Status: **Accepted (Amended by [ADR-0014](0014-idempotency-key-extraction.md), 2026-05-25)**
 - Date: 2026-05-25 (Round 5 멱등성 결정 2026-05-23 + A-1.3 2-Phase 결정 2026-05-25 통합)
 - Deciders: kenny.k
 - Tags: data-model, concurrency, idempotency
+
+> ⚠️ **본 ADR은 일부 amend됨 (2026-05-25)**: 멱등 추적(phase·핑거프린트·결과 캐시)이 Transfer 본 테이블 컬럼에서 별도 IdempotencyKey 엔터티로 위임됨. **멱등성 정책의 큰 골격**(서버 GUID 발급·2-Phase·다층 락·핑거프린트 관찰 정책)은 본 ADR 그대로 유효. **컬럼 위치·캐시 메커니즘**은 ADR-0014 참조. 배경 분석은 [Idempotency 설계 검토 KB](../references/idempotency-design-discussion.md) 참조.
 
 ## Context
 
@@ -51,7 +53,9 @@
 
 ## References
 
+- [ADR-0014 IdempotencyKey 별도 테이블 분리](0014-idempotency-key-extraction.md) — 본 ADR의 컬럼 위치 결정을 amend
+- [Idempotency 설계 검토 KB](../references/idempotency-design-discussion.md) — amend 결정의 전체 분석 흐름 보존
 - ADR-0002 (NFR — 5,000 TPS, 99.99%)
-- ADR-0009 (Transfer 엔터티 구조 — IDEMPOTENCY_PHASE 컬럼 추가)
+- ADR-0009 (Transfer 엔터티 구조)
 - ADR-0011 (데이터 모델 컨벤션 — 시스템 컬럼)
-- Stripe Idempotency-Key 문서 (참고): https://docs.stripe.com/api/idempotent_requests
+- Stripe Idempotency-Key 문서: https://docs.stripe.com/api/idempotent_requests
