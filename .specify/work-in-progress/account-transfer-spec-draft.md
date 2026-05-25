@@ -103,18 +103,25 @@ A-1.4 Transfer 검토 중 사용자가 확정한 컨벤션. 본 spec 작업의 *
 
 ### A. 핵심 거래 (필수) — A-1 검토 결과 반영
 
-#### A-1. Transfer (드라이빙 테이블) — 1차 확정안
+#### A-1. Transfer (드라이빙 테이블) — 2차 확정안 (재검토 반영)
 
 > 표기 규칙: Spec 문서·도메인 코드는 **카멜케이스**, DB 컬럼은 **소문자 스네이크**로 자동 변환 (ADR-0012). 예: `transferId` ↔ `transfer_id`.
 
-**PK** (도메인 표기): `(requesterUserId, transferDate, transferId)` → DB: `(requester_user_id, transfer_date, transfer_id)`
+**재검토 변경 사항 (2026-05-25)**:
+- #1 `requesterUserId` → `userId` (도메인적으로 자립한 명사라 prefix 불필요. 본 테이블의 userId = 항상 이체 요청자 = 출금계좌 소유자)
+- #4 `transferKind` 값 셋 통합: `IMMEDIATE_INTRABANK` / `IMMEDIATE_INTERBANK` → **`IMMEDIATE`** 단일화 (당행·타행 구분은 `fromBankCode == toBankCode` 또는 도메인 메서드). 결과: `IMMEDIATE` / `SCHEDULED` / `BATCH_CHILD` 3종
+- #19 `idempotencyPhase` **제거** → D-12 IdempotencyKey로 위임 (ADR-0014)
+- #20 `initiatedAt` **제거** → `createdAt`(시스템 컬럼)이 동일 시각 + IdempotencyKey가 도메인적 보관 (ADR-0014)
+- #21 `requestedAt`, #22 `completedAt` **유지** (비즈니스 의미)
+
+**PK** (도메인 표기): `(userId, transferDate, transferId)` → DB: `(user_id, transfer_date, transfer_id)`
 
 | # | 속성 (도메인) | 의미 | 비고 |
 |---|---|---|---|
-| 1 | `requesterUserId` | 요청자 (개인 고객 ID) | **PK1** — 사용자별 조회 path / 샤딩 |
+| 1 | `userId` | 요청자 (개인 고객 ID = 출금계좌 소유자) | **PK1** — 사용자별 조회 path / 샤딩 |
 | 2 | `transferDate` | 거래 발생 일자 (KST 기준, `requestedAt`의 날짜 부분) | **PK2** — 일자별 파티션 |
-| 3 | `transferId` | 서버 생성 GUID, 외부 식별자·1-Phase 멱등키 겸용 | **PK3** |
-| 4 | `transferKind` | `IMMEDIATE_INTRABANK` / `IMMEDIATE_INTERBANK` / `SCHEDULED` / `BATCH_CHILD` | 드리븐 라우팅 |
+| 3 | `transferId` | 서버 생성 GUID, 외부 식별자 | **PK3** |
+| 4 | `transferKind` | `IMMEDIATE` / `SCHEDULED` / `BATCH_CHILD` (3종) | 드리븐 라우팅. 당행/타행 구분은 `fromBankCode == toBankCode` |
 | 5 | `fromBankCode` | 출금 은행 코드 (자행) | |
 | 6 | `fromAccountNumber` | 출금 계좌번호 | |
 | 7 | `toBankCode` | 수취 은행 코드 | |
@@ -123,23 +130,23 @@ A-1.4 Transfer 검토 중 사용자가 확정한 컨벤션. 본 spec 작업의 *
 | 10 | `transferAmount` | 이체 금액 | |
 | 11 | `transferCurrency` | 통화 (v1 KRW, ISO 4217) | |
 | 12 | `transferMemo` | 사용자 입력 적요 | |
-| 13 | `transferStatus` | 전체 상태 (TransferStateHistory 최신과 동기화) | |
+| 13 | `transferStatus` | 전체 상태 (TransferStateHistory 최신과 동기화). enum: `INITIATED` / `PROCESSING` / `COMPLETED` / `FAILED` / `CANCEL_REQUESTED` / `CANCELED` | 멱등 처리는 D-12와 협업 (ADR-0014) |
 | 14 | `failureReasonCode` | 실패 사유 코드 | 성공 시 NULL |
 | 15 | `failureReasonMessage` | 실패 사유 메시지 | 성공 시 NULL |
 | 16 | `parentBatchRequestId` | `BATCH_CHILD`일 때 BatchTransferRequest 참조 | nullable |
 | 17 | `authenticationRefId` | 인증·전자서명 토큰 참조 (외부 인증시스템) | |
 | 18 | `payeeVerificationSnapshotId` | PayeeVerificationSnapshot 참조 | |
-| 19 | `idempotencyPhase` | `INITIATED` / `EXECUTED` (2-Phase 추적) | A-1.3 반영 |
-| 20 | `initiatedAt` | 1-Phase 시각 (transferId 발급) | |
-| 21 | `requestedAt` | 2-Phase 시각 (이체 실행 요청) | |
-| 22 | `completedAt` | 종료 시각 (성공/실패/취소) | nullable |
-| 23 | `userContextSnapshotId` | UserContextSnapshot 참조 (G-19) | |
-| 24 | `createdAt` | 시스템: 최초 INSERT 시각 | |
-| 25 | `createdById` | 시스템: 최초 INSERT actor ID | |
-| 26 | `createdByGuid` | 시스템: 최초 INSERT 호출 추적 GUID | |
-| 27 | `updatedAt` | 시스템: 최종 UPDATE 시각 | |
-| 28 | `updatedById` | 시스템: 최종 UPDATE actor ID | |
-| 29 | `updatedByGuid` | 시스템: 최종 UPDATE 호출 추적 GUID | |
+| 19 | `requestedAt` | 2-Phase 시각 (사용자가 이체 실행을 요청한 시점). 비즈니스 의미 | |
+| 20 | `completedAt` | 종료 시각 (성공/실패/취소) | nullable |
+| 21 | `userContextSnapshotId` | UserContextSnapshot 참조 (G-19) | |
+| 22 | `createdAt` | 시스템: 최초 INSERT 시각 (= 1-Phase 시각과 동일) | |
+| 23 | `createdById` | 시스템: 최초 INSERT actor ID | |
+| 24 | `createdByGuid` | 시스템: 최초 INSERT 호출 추적 GUID | |
+| 25 | `updatedAt` | 시스템: 최종 UPDATE 시각 | |
+| 26 | `updatedById` | 시스템: 최종 UPDATE actor ID | |
+| 27 | `updatedByGuid` | 시스템: 최종 UPDATE 호출 추적 GUID | |
+
+→ 27개 컬럼 (이전 29개에서 멱등 관련 #19, #20 제거)
 
 #### A 카테고리 잔여 엔터티 (A-2 이하, 동일 컨벤션으로 후속 검토)
 - **A-2. ImmediateTransferDetail (드리븐)** — 당행/타행 즉시이체 공통 특수정보 (신규, A-1.1에서 도출)
@@ -177,3 +184,11 @@ A-1.4 Transfer 검토 중 사용자가 확정한 컨벤션. 본 spec 작업의 *
 ### H. 향후 (v1 제외, 식별만)
 - **FraudReviewCase** — FDS 심사 케이스
 - **QRTransferRequest / SMSTransferRequest** — QR·SMS 이체 확장
+
+---
+
+## 향후 상세 검토 대기 항목 (사용자가 "때가 되면" 진행 요청)
+
+| 항목 | 설명 | 관련 문서 |
+|---|---|---|
+| **D-12 IdempotencyKey 컬럼 구조** | PK 구성, requestFingerprintHash 알고리즘, resultPayloadCache 직렬화, TTL 정책, Transfer와의 1:1 정합성, 정리 job 설계 | [ADR-0014](../../docs/decisions/0014-idempotency-key-extraction.md), [Idempotency KB](../../docs/references/idempotency-design-discussion.md) |
