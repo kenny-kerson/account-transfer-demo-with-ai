@@ -1,13 +1,19 @@
 # 계좌이체 서비스 Spec 작업 — 진행 중
 
-**상태**: 일시중단 (2026-05-23). 다음 세션에서 `/speckit-specify` 흐름 이어서 진행.
+**상태**: 진행 중 (2026-05-25). Round 6 A-1 Transfer 속성 검토 마무리 단계 — 데이터 모델 컨벤션·DB 컬럼 케이스·도메인-영속화 매핑 전략 결정 완료. 다음: A-1.4 속성 표 카멜케이스 환원 → A-2 ImmediateTransferDetail 검토.
+
+**ADR 백필 완료** (2026-05-25): 본 작업의 모든 의사결정은 `docs/decisions/` 에 ADR-0001~0013으로 기록. 향후 결정도 신규 ADR로 추가. 인덱스: [docs/decisions/README.md](../../docs/decisions/README.md). 매핑 전략 참고 자료: [docs/references/mapping-strategies.md](../../docs/references/mapping-strategies.md).
 **원본 요청**: "계좌이체 서비스를 구현하려고 해. … 질의응답을 통해 하나씩 구체화 … 애매한 부분이 있으면 자의적으로 해석하지 말고 물어봐줘."
 
 ---
 
 ## 진행 위치
 - Round 1~5 (질의응답): **완료**
-- Round 6 (엔터티 후보 검토): **A-1 `Transfer`에서 중단** → 다음에 여기부터 재개
+- Round 6 (엔터티 후보 검토): **A-1 진행 중**
+  - A-1.1 구조 결정: ✅ **드라이빙(Transfer) + 드리븐(ImmediateTransferDetail·ScheduledTransferDetail) + 다건메타(BatchTransferRequest)**
+  - A-1.2 다건자식 표현: ✅ A-1.1 답변에 포함됨 — ImmediateTransferDetail에 그대로 + BatchTransferRequest로 묶음
+  - A-1.3 멱등성 단위: ✅ **하이브리드 — 2-Phase transferId(INITIATED→EXECUTED) + 출금계좌 락 + 요청 핑거프린트 관찰(논블로킹 경고)**. 의도된 연속 이체는 차단하지 않음.
+  - A-1.4 속성 세트 검토: 🔵 진행 중
 - `before_specify` hook (`speckit.git.feature`): **미실행**
 - `specs/<NNN>-account-transfer/spec.md`: **미작성**
 
@@ -15,6 +21,35 @@
 1. 본 파일을 읽어 결정 사항·엔터티 후보 확인
 2. Round 6 엔터티 검토를 **A-1 Transfer**부터 하나씩 재개 (사용자 선호: 묶음 X, 하나씩 ✅)
 3. 전체 엔터티 검토 완료 후 `before_specify` hook 실행 → spec 디렉토리 생성 → `spec.md` 작성 → requirements 체크리스트 생성·검증
+
+---
+
+## 데이터 모델 컨벤션 (모든 엔터티에 일관 적용)
+
+A-1.4 Transfer 검토 중 사용자가 확정한 컨벤션. 본 spec 작업의 **모든 엔터티(A~H 전체)**에 동일하게 적용.
+
+1. **PK 명시**: 각 테이블 정의 시 PK 컬럼을 명시적으로 표시
+2. **PK 구성 패턴**: `(사용자ID, 일자, 식별자)` 형태의 복합 PK 사용
+   - **사용자별 조회 path 대응** + **사용자별 샤딩 or 일자별 파티션 대응**
+   - 사용자 비귀속 엔터티는 별도 PK 패턴 (예: 정책 마스터는 종류·인증수준 조합 등)
+3. **컬럼명에 도메인 prefix 강제**: 컬럼명만 봐도 의미가 자립하도록
+   - 예: `KIND` ❌ → `TRANSFER_KIND` ✅, `MEMO` ❌ → `TRANSFER_MEMO` ✅, `STATUS` ❌ → `TRANSFER_STATUS` ✅
+4. **은행계좌는 은행코드 + 계좌번호로 분리**: `fromAccount` ❌ → `FROM_BANK_CODE` + `FROM_ACCOUNT_NUMBER` ✅
+5. **시스템 컬럼 세트 (모든 테이블 공통)** — 모니터링·데이터 변경 탐지용 (Spec 문서는 카멜케이스, DB 컬럼은 snake_case로 변환):
+   - `createdAt` (최초 INSERT 일시)
+   - `createdById` (최초 INSERT actor의 비즈니스 ID — 사용자/시스템/배치)
+   - `createdByGuid` (최초 INSERT 호출 추적 GUID — request trace ID)
+   - `updatedAt` (최종 UPDATE 일시)
+   - `updatedById` (최종 UPDATE actor ID)
+   - `updatedByGuid` (최종 UPDATE 호출 추적 GUID)
+
+### 케이스 컨벤션 (ADR-0012, ADR-0013)
+- **Spec 문서·도메인 코드**: 카멜케이스 (`transferId`, `fromBankCode`)
+- **DB 컬럼**: 소문자 스네이크 (`transfer_id`, `from_bank_code`) — MySQL+JPA `SpringPhysicalNamingStrategyStandardImpl` 자동 변환
+- **도메인-영속화 계층 분리**: 옵션 3(부분 분리, CQRS 영향) + 톰 홈버그 매핑 전략 혼합 — 코어 ③ One-Way / 단순조회 ① No Mapping / 명령·복잡조회 ④ Full Mapping
+- **강제 분리**: Repository 인터페이스 분리(A) + Read-only Projection(B) + `@Transactional(readOnly = true)`(C) + 엔터티 캡슐화(D) **모두 적용**
+
+> ⏳ A-1.4 속성 표 카멜케이스 환원이 다음 단계 (현재 표는 SCREAMING_SNAKE_CASE 상태 — 곧 교체 예정)
 
 ---
 
@@ -65,12 +100,50 @@
 
 ## Round 6 엔터티 후보 (검토 대기)
 
-### A. 핵심 거래 (필수)
-1. **Transfer** — 단일 이체의 본체 ⬅️ **다음 재개 지점**
-2. **TransferStateHistory** — 상태 전이 트레일
-3. **TransferBatch** — 다건이체 묶음 메타 (최대 1만건+)
-4. **ScheduledTransfer** — 예약 메타 + 예치 자금 식별자
-5. **PayeeVerificationSnapshot** — 수취인 사전검증 결과 스냅샷
+### A. 핵심 거래 (필수) — A-1 검토 결과 반영
+
+#### A-1. Transfer (드라이빙 테이블) — 1차 확정안 (추가 수정 대기 중)
+
+**PK**: `(REQUESTER_USER_ID, TRANSFER_DATE, TRANSFER_ID)`
+
+| # | 컬럼 | 의미 | 비고 |
+|---|---|---|---|
+| 1 | `REQUESTER_USER_ID` | 요청자 (개인 고객 ID) | **PK1** — 사용자별 조회 path / 샤딩 |
+| 2 | `TRANSFER_DATE` | 거래 발생 일자 (KST 기준, `REQUESTED_AT`의 날짜 부분) | **PK2** — 일자별 파티션 |
+| 3 | `TRANSFER_ID` | 서버 생성 GUID, 외부 식별자·1-Phase 멱등키 겸용 | **PK3** |
+| 4 | `TRANSFER_KIND` | `IMMEDIATE_INTRABANK` / `IMMEDIATE_INTERBANK` / `SCHEDULED` / `BATCH_CHILD` | 드리븐 라우팅 |
+| 5 | `FROM_BANK_CODE` | 출금 은행 코드 (자행) | |
+| 6 | `FROM_ACCOUNT_NUMBER` | 출금 계좌번호 | |
+| 7 | `TO_BANK_CODE` | 수취 은행 코드 | |
+| 8 | `TO_ACCOUNT_NUMBER` | 수취 계좌번호 | |
+| 9 | `TO_PAYEE_NAME_INPUT` | 사용자가 입력한 수취 예금주명 (검증은 PayeeVerificationSnapshot) | |
+| 10 | `TRANSFER_AMOUNT` | 이체 금액 | |
+| 11 | `TRANSFER_CURRENCY` | 통화 (v1 KRW, ISO 4217) | |
+| 12 | `TRANSFER_MEMO` | 사용자 입력 적요 | |
+| 13 | `TRANSFER_STATUS` | 전체 상태 (TransferStateHistory 최신과 동기화) | |
+| 14 | `FAILURE_REASON_CODE` | 실패 사유 코드 | 성공 시 NULL |
+| 15 | `FAILURE_REASON_MESSAGE` | 실패 사유 메시지 | 성공 시 NULL |
+| 16 | `PARENT_BATCH_REQUEST_ID` | `BATCH_CHILD`일 때 BatchTransferRequest 참조 | nullable |
+| 17 | `AUTHENTICATION_REF_ID` | 인증·전자서명 토큰 참조 (외부 인증시스템) | |
+| 18 | `PAYEE_VERIFICATION_SNAPSHOT_ID` | PayeeVerificationSnapshot 참조 | |
+| 19 | `IDEMPOTENCY_PHASE` | `INITIATED` / `EXECUTED` (2-Phase 추적) | A-1.3 반영 |
+| 20 | `INITIATED_AT` | 1-Phase 시각 (TRANSFER_ID 발급) | |
+| 21 | `REQUESTED_AT` | 2-Phase 시각 (이체 실행 요청) | |
+| 22 | `COMPLETED_AT` | 종료 시각 (성공/실패/취소) | nullable |
+| 23 | `USER_CONTEXT_SNAPSHOT_ID` | UserContextSnapshot 참조 (G-19) | |
+| 24 | `CREATED_AT` | 시스템: 최초 INSERT 시각 | |
+| 25 | `CREATED_BY_ID` | 시스템: 최초 INSERT actor ID | |
+| 26 | `CREATED_BY_GUID` | 시스템: 최초 INSERT 호출 추적 GUID | |
+| 27 | `UPDATED_AT` | 시스템: 최종 UPDATE 시각 | |
+| 28 | `UPDATED_BY_ID` | 시스템: 최종 UPDATE actor ID | |
+| 29 | `UPDATED_BY_GUID` | 시스템: 최종 UPDATE 호출 추적 GUID | |
+
+#### A 카테고리 잔여 엔터티 (A-2 이하, 동일 컨벤션으로 후속 검토)
+- **A-2. ImmediateTransferDetail (드리븐)** — 당행/타행 즉시이체 공통 특수정보 (신규, A-1.1에서 도출)
+- **A-3. ScheduledTransferDetail (드리븐)** — 예약이체 전용 (예약일시·예치자금 식별자) [구 `ScheduledTransfer`]
+- **A-4. BatchTransferRequest (다건 시도 메타)** — 다건이체 1회 시도의 메타. 자식은 ImmediateTransferDetail에 + `PARENT_BATCH_REQUEST_ID`로 연결 [구 `TransferBatch`]
+- **A-5. TransferStateHistory** — 상태 전이 트레일 (이전 #2)
+- **A-6. PayeeVerificationSnapshot** — 수취인 사전검증 결과 스냅샷 (이전 #5)
 
 ### B. 한도 관리
 6. **TransferLimitPolicy** — 이체 종류·인증수준별 한도 정의(시스템)
